@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
-
+using System.Collections.Generic;
+using System.Linq;
 
 public interface IEnrollmentService{
     Task<EnrollmentRecord> EnrollAsync(string studentId, string courseCode);
@@ -87,3 +88,5 @@ public record EnrollmentRecord(
     string CourseCode,
     DateTime EnrolledAt
 );
+
+public class TmsDatabaseException(string message) : Exception(message) { }
