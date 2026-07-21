@@ -1,72 +1,101 @@
-using Microsoft.Extensions.Logging;
-using System.Collections.Generic;
-using System.Linq;
+using Microsoft.EntityFrameworkCore;
+using TmsApi.Data;
+using TmsApi.Dtos;
+using TmsApi.Entities;
 
-public interface ICourseService
+namespace TmsApi.Services;
+
+public class CourseService(TmsDbContext context, ILogger<CourseService> logger) : ICourseService
 {
-    Task<CourseRecord> CreateAsync(CreateCourseRequest request);
-    Task<CourseRecord?> GetByCodeAsync(string code);
-    Task<IReadOnlyList<CourseRecord>> GetAllAsync();
-    Task<bool> DeleteAsync(string code);
-}
+    public async Task<CourseResponseDto?> GetByIdAsync(int id, CancellationToken ct = default)
+    {
+        return await context.Courses
+            .AsNoTracking()
+            .Where(c => c.Id == id)
+            .Select(c => new CourseResponseDto(
+                c.Id,
+                c.Code,
+                c.Title,
+                c.MaxCapacity,
+                c.Enrollments.Count))
+            .FirstOrDefaultAsync(ct);
+    }
 
-public class CourseService : ICourseService
+    public async Task<CourseResponseDto> CreateAsync(CreateCourseRequest request, CancellationToken ct = default)
+    {
+    if (await CodeExistsAsync(request.Code, ct))
+    {
+        throw new InvalidOperationException($"A course with code '{request.Code}' already exists.");
+    }
+
+    var course = new Course
+    {
+        Code = request.Code,
+        Title = request.Title,
+        MaxCapacity = request.MaxCapacity
+    };
+
+    context.Courses.Add(course);
+    await context.SaveChangesAsync(ct);
+
+    logger.LogInformation("Created course {Id} with code {Code}", course.Id, course.Code);
+
+    return (await GetByIdAsync(course.Id, ct))!;
+    }
+
+    public Task<bool> CodeExistsAsync(string code, CancellationToken ct = default)
+    {
+        return context.Courses.AsNoTracking()
+            .AnyAsync(c => c.Code == code, ct);
+    }
+
+    public async Task<PagedResponse<CourseResponseDto>> GetCoursesAsync(PagedRequest request, CancellationToken ct = default)
 {
-    private static readonly Dictionary<string, CourseRecord> _store = new();
-    private readonly ILogger<CourseService> _logger;
+    IQueryable<Course> query = context.Courses.AsNoTracking();
 
-    public CourseService(ILogger<CourseService> logger)
+    
+    if (!string.IsNullOrWhiteSpace(request.Search))
     {
-        _logger = logger;
+        var searchTerm = $"%{request.Search}%";
+        query = query.Where(c => EF.Functions.ILike(c.Title, searchTerm) ||
+                                 EF.Functions.ILike(c.Code, searchTerm));
     }
 
-    public Task<CourseRecord> CreateAsync(CreateCourseRequest request)
+    
+    var totalCount = await query.CountAsync(ct);
+
+    
+    query = request.OrderBy?.ToLower() switch
     {
-        if (_store.ContainsKey(request.Code))
-        {
-            _logger.LogWarning("Course with code {CourseCode} already exists", request.Code);
-            return Task.FromResult(_store[request.Code]);
-        }
+        "code" => request.Descending 
+            ? query.OrderByDescending(c => c.Code) 
+            : query.OrderBy(c => c.Code),
+        "maxcapacity" => request.Descending 
+            ? query.OrderByDescending(c => c.MaxCapacity) 
+            : query.OrderBy(c => c.MaxCapacity),
+        _ => request.Descending 
+            ? query.OrderByDescending(c => c.Title) 
+            : query.OrderBy(c => c.Title)
+    };
 
-        var course = new CourseRecord(request.Code, request.Title, request.Description, DateTime.UtcNow);
-        _store[request.Code] = course;
+    
+    var items = await query
+        .Skip((request.Page - 1) * request.PageSize)
+        .Take(request.PageSize)
+        .Select(c => new CourseResponseDto(
+            c.Id,
+            c.Code,
+            c.Title,
+            c.MaxCapacity,
+            c.Enrollments.Count))
+        .ToListAsync(ct);
 
-        _logger.LogInformation("Created course {CourseCode} - {Title}", request.Code, request.Title);
-        return Task.FromResult(course);
-    }
-
-    public Task<CourseRecord?> GetByCodeAsync(string code)
+    return new PagedResponse<CourseResponseDto>
     {
-        _store.TryGetValue(code, out var course);
-        if (course is null)
-        {
-            _logger.LogWarning("Course {CourseCode} not found", code);
-        }
-        return Task.FromResult(course);
-    }
-
-    public Task<IReadOnlyList<CourseRecord>> GetAllAsync()
-    {
-        return Task.FromResult<IReadOnlyList<CourseRecord>>(_store.Values.ToList());
-    }
-
-    public Task<bool> DeleteAsync(string code)
-    {
-        var removed = _store.Remove(code);
-        if (removed)
-            _logger.LogInformation("Deleted course {CourseCode}", code);
-        else
-            _logger.LogWarning("Delete failed - course {CourseCode} not found", code);
-
-        return Task.FromResult(removed);
+        Items = items,
+        TotalCount = totalCount,
+        Page = request.Page,
+        PageSize = request.PageSize
+    };
     }
 }
-
-public record CreateCourseRequest(string Code, string Title, string Description);
-
-public record CourseRecord(
-    string Code,
-    string Title,
-    string Description,
-    DateTime CreatedAt
-);
