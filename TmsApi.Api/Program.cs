@@ -183,22 +183,32 @@ builder.Services.AddRateLimiter(options =>
     });
 });
 
+var allowedOrigins = builder.Configuration
+    .GetSection("AllowedOrigins")
+    .Get<string[]>()
+    ?? ["http://localhost:4200"];
+
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAngular", policy =>
-        policy.WithOrigins("http://localhost:4200")
+    options.AddPolicy("TmsClient", policy =>
+    {
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyHeader()
               .AllowAnyMethod()
-              .AllowCredentials());
+              .AllowCredentials() // needed for Session 2 cookies
+              .SetPreflightMaxAge(TimeSpan.FromMinutes(10));
+    });
 });
+
+
 
 var app = builder.Build();
 
-app.MapHub<TmsHub>("/hubs/tms");
+
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 
-app.UseCors("AllowAngular");
+//app.UseCors("AllowAngular");
 
 app.UseMiddleware<RequestLoggingMiddleware>();
 app.UseMiddleware<V1DeprecationMiddleware>();
@@ -208,6 +218,7 @@ app.UseMiddleware<V1DeprecationMiddleware>();
 
 
 app.UseRouting();
+app.UseCors("TmsClient");
 app.UseRateLimiter();
 
 app.UseAuthentication();
@@ -218,6 +229,7 @@ app.UseAuthorization();
 
 
 app.MapControllers();
+app.MapHub<TmsHub>("/hubs/tms");
 
 if (app.Environment.IsDevelopment())
 {
