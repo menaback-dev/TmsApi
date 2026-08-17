@@ -25,6 +25,7 @@ using TmsApi.Infrastructure.Workers;
 using TmsApi.Api.Hubs;
 using TmsApi.Application.Notifications;
 using TmsApi.Api.Notifications;
+using Microsoft.AspNetCore.Antiforgery;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -200,6 +201,11 @@ builder.Services.AddCors(options =>
     });
 });
 
+builder.Services.AddAntiforgery(options =>
+{
+    options.HeaderName = "X-XSRF-TOKEN";
+});
+
 
 
 var app = builder.Build();
@@ -226,7 +232,27 @@ app.UseAuthentication();
 
 app.UseAuthorization();
 
+app.Use(async (context, next) =>
+{
+    if (context.User.Identity?.IsAuthenticated == true
+        || context.Request.Cookies.ContainsKey("tms_auth"))
+    {
+        var antiforgery = context.RequestServices.GetRequiredService<IAntiforgery>();
+        var tokens = antiforgery.GetAndStoreTokens(context);
 
+        context.Response.Cookies.Append(
+            "XSRF-TOKEN",
+            tokens.RequestToken!,
+            new CookieOptions
+            {
+                HttpOnly = false, // Angular must read this
+                Secure = !app.Environment.IsDevelopment(),
+                SameSite = SameSiteMode.Strict
+            });
+    }
+
+    await next(context);
+});
 
 app.MapControllers();
 app.MapHub<TmsHub>("/hubs/tms");
