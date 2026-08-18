@@ -1,43 +1,90 @@
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using TmsApi.Application.Dtos;
+using TmsApi.Infrastructure.Identity;
 
 namespace TmsApi.Api.Controllers;
 
 [ApiController]
-[Route("api/auth")]
-public class AuthController : ControllerBase
+[Route("api/[controller]")]
+public class AuthController(
+    UserManager<TmsUser> userManager,
+    RoleManager<IdentityRole> roleManager) : ControllerBase
 {
-    [HttpPost("login")]
-    public IActionResult Login(
-        [FromBody] LoginRequest request,
-        [FromServices] IWebHostEnvironment env)
+    public record RegisterRequest(
+        string Email,
+        string Password,
+        string FirstName,
+        string LastName,
+        string Role);
+
+    public record LoginRequest(string Email, string Password);
+
+    [HttpPost("register")]
+    public async Task<IActionResult> Register([FromBody] RegisterRequest request)
     {
-        if (request.Username == "admin" && request.Password == "Password123!")
+        var existingUser = await userManager.FindByEmailAsync(request.Email);
+        if (existingUser != null)
         {
-            var dummyJwt = "header.payload.signature-demo-token";
-
-            Response.Cookies.Append("tms_auth", dummyJwt, new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = !env.IsDevelopment(),
-                SameSite = SameSiteMode.Strict,
-                Expires = DateTimeOffset.UtcNow.AddHours(2)
-            });
-
-            return Ok(new UserProfileDto("System Admin", "Admin"));
+            return Ok(new { message = "Registration request received." });
         }
 
-        return Unauthorized(new { detail = "Invalid username or password." });
+        var user = new TmsUser
+        {
+            UserName = request.Email,
+            Email = request.Email,
+            FirstName = request.FirstName,
+            LastName = request.LastName
+        };
+
+        var result = await userManager.CreateAsync(user, request.Password);
+        if (!result.Succeeded)
+        {
+            var errors = result.Errors.Select(e => e.Description);
+            return BadRequest(new { errors });
+        }
+
+        if (!await roleManager.RoleExistsAsync(request.Role))
+        {
+            await roleManager.CreateAsync(new IdentityRole(request.Role));
+        }
+
+        await userManager.AddToRoleAsync(user, request.Role);
+
+        return Ok(new { message = "Registration successful." });
     }
 
-    [HttpGet("me")]
-    public IActionResult GetCurrentUser()
+    [HttpPost("login")]
+    public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
-        if (Request.Cookies.TryGetValue("tms_auth", out _))
+        var user = await userManager.FindByEmailAsync(request.Email);
+        if (user is null)
         {
-            return Ok(new UserProfileDto("System Admin", "Admin"));
+            return Unauthorized(new { detail = "Invalid credentials." });
         }
 
-        return Unauthorized(new { detail = "Session expired or missing authentication cookie." });
+        if (await userManager.IsLockedOutAsync(user))
+        {
+            return StatusCode(StatusCodes.Status423Locked, new
+            {
+                detail = "Account locked due to multiple failed login attempts. Try again in 15 minutes."
+            });
+        }
+
+        var validPassword = await userManager.CheckPasswordAsync(user, request.Password);
+        if (!validPassword)
+        {
+            await userManager.AccessFailedAsync(user);
+            return Unauthorized(new { detail = "Invalid credentials." });
+        }
+
+        await userManager.ResetAccessFailedCountAsync(user);
+
+        return Ok(new
+        {
+            userId = user.Id,
+            email = user.Email,
+            firstName = user.FirstName,
+            lastName = user.LastName
+        });
     }
 }
