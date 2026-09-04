@@ -3,4 +3,5 @@
   <Project Path="TmsApi.Application/TmsApi.Application.csproj" />
   <Project Path="TmsApi.Domain/TmsApi.Domain.csproj" />
   <Project Path="TmsApi.Infrastructure/TmsApi.Infrastructure.csproj" />
+  <Project Path="TmsApi.Tests/TmsApi.Tests.csproj" />
 </Solution>
