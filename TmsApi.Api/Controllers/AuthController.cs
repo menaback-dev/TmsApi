@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using TmsApi.Application.Common;
 using TmsApi.Domain.Entities;
 using TmsApi.Infrastructure.Identity;
 using TmsApi.Infrastructure.Persistence;
@@ -47,6 +48,7 @@ public class AuthController : ControllerBase
         var existingUser = await _userManager.FindByEmailAsync(request.Email);
         if (existingUser != null)
         {
+            // Prevent account enumeration
             return Ok(new { message = "Registration request received." });
         }
 
@@ -65,7 +67,6 @@ public class AuthController : ControllerBase
             return BadRequest(new { errors });
         }
 
-        // Ensure requested role exists
         if (!await _roleManager.RoleExistsAsync(request.Role))
         {
             await _roleManager.CreateAsync(new IdentityRole(request.Role));
@@ -73,7 +74,35 @@ public class AuthController : ControllerBase
 
         await _userManager.AddToRoleAsync(user, request.Role);
 
-        return Ok(new { message = "Registration successful." });
+        string? registrationNumber = null;
+
+        if (string.Equals(request.Role, "Student", StringComparison.OrdinalIgnoreCase))
+        {
+            var existing = await _context.Students
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Select(s => s.RegistrationNumber)
+                .ToListAsync();
+
+            registrationNumber = StudentRegistrationNumbers.Next(existing);
+
+            _context.Students.Add(new Student
+            {
+                RegistrationNumber = registrationNumber,
+                Name = $"{request.FirstName} {request.LastName}".Trim(),
+                GPA = 0m,
+                IsActive = true,
+                IsDeleted = false
+            });
+
+            await _context.SaveChangesAsync();
+        }
+
+        return Ok(new
+        {
+            message = "Registration successful.",
+            studentId = registrationNumber
+        });
     }
     [EnableRateLimiting("AuthLimiter")]
     [HttpPost("login")]
